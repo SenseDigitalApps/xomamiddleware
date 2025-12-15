@@ -1,0 +1,46 @@
+# Docker Compose Override para Desarrollo
+# Uso: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  # ===== Web (Development Mode) =====
+  web:
+    # Usar runserver en lugar de gunicorn para hot reload
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      DEBUG: "True"
+      ALLOWED_HOSTS: "*"
+    volumes:
+      # Montar código fuente para hot reload
+      - .:/app
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+
+  # ===== PostgreSQL (Development) =====
+  db:
+    ports:
+      - "5432:5432"  # Exponer para acceso externo (pgAdmin, etc.)
+
+  # ===== Redis (Development) =====
+  redis:
+    ports:
+      - "6379:6379"  # Exponer para acceso externo (Redis CLI, etc.)
+
+  # ===== Celery Worker (Development) =====
+  celery:
+    command: celery -A app worker -l debug --concurrency=2
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+
+  # ===== Celery Beat (Development) =====
+  celery-beat:
+    command: celery -A app beat -l debug
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+

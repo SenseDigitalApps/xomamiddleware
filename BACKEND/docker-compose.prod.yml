@@ -1,0 +1,62 @@
+# Docker Compose Override para Producción
+# Uso: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+version: '3.8'
+
+services:
+  # ===== Web (Production Mode) =====
+  web:
+    command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 --access-logfile /app/logs/access.log --error-logfile /app/logs/error.log app.wsgi:application
+    environment:
+      DEBUG: "False"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost}
+    # No exponer puerto directamente (usar nginx)
+    expose:
+      - "8000"
+
+  # ===== Nginx (Reverse Proxy & Static Files) =====
+  nginx:
+    image: nginx:alpine
+    container_name: meet-middleware-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./staticfiles:/app/staticfiles:ro
+      - ./media:/app/media:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - web
+    restart: unless-stopped
+    networks:
+      - meet-network
+
+  # ===== Celery Worker (Production) =====
+  celery:
+    command: celery -A app worker -l info --concurrency=4 --max-tasks-per-child=1000
+    environment:
+      DEBUG: "False"
+
+  # ===== Celery Beat (Production) =====
+  celery-beat:
+    command: celery -A app beat -l info
+    environment:
+      DEBUG: "False"
+
+  # ===== PostgreSQL (Production) =====
+  db:
+    # No exponer puerto externamente en producción
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+
+  # ===== Redis (Production) =====
+  redis:
+    # No exponer puerto externamente en producción
+    expose:
+      - "6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+

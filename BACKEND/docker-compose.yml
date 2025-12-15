@@ -1,0 +1,179 @@
+# Docker Compose - Meet Middleware
+# Orquestación completa de servicios para el middleware de Google Meet
+
+version: '3.8'
+
+services:
+  # ===== PostgreSQL Database =====
+  db:
+    image: postgres:15-alpine
+    container_name: meet-middleware-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-meet_middleware_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=en_US.UTF-8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-meet_middleware_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - meet-network
+
+  # ===== Redis (Cache & Celery Broker) =====
+  redis:
+    image: redis:7-alpine
+    container_name: meet-middleware-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - meet-network
+
+  # ===== Django Web Application =====
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meet-middleware-web
+    command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 --access-logfile - --error-logfile - app.wsgi:application
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    environment:
+      # Django Settings
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-change-this-in-production}
+      DEBUG: ${DEBUG:-False}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      
+      # Database
+      POSTGRES_DB: ${POSTGRES_DB:-meet_middleware_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      
+      # CORS
+      CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-True}
+      
+      # Celery & Redis
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      
+      # Google Workspace (opcional)
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-}
+      GOOGLE_WORKSPACE_ADMIN_EMAIL: ${GOOGLE_WORKSPACE_ADMIN_EMAIL:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+      
+      # Django Superuser (creación automática)
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME:-}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+      - ./logs:/app/logs
+      - ${GOOGLE_SERVICE_ACCOUNT_FILE:-./dummy.json}:/app/credentials/service-account.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/api/v1/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - meet-network
+
+  # ===== Celery Worker (Async Tasks) =====
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meet-middleware-celery
+    command: celery -A app worker -l info --concurrency=4
+    environment:
+      # Database
+      POSTGRES_DB: ${POSTGRES_DB:-meet_middleware_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      
+      # Celery & Redis
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      
+      # Google Workspace (opcional)
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-}
+      GOOGLE_WORKSPACE_ADMIN_EMAIL: ${GOOGLE_WORKSPACE_ADMIN_EMAIL:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+    depends_on:
+      - db
+      - redis
+      - web
+    volumes:
+      - ./logs:/app/logs
+      - ${GOOGLE_SERVICE_ACCOUNT_FILE:-./dummy.json}:/app/credentials/service-account.json:ro
+    restart: unless-stopped
+    networks:
+      - meet-network
+
+  # ===== Celery Beat (Scheduled Tasks) =====
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meet-middleware-celery-beat
+    command: celery -A app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      # Database
+      POSTGRES_DB: ${POSTGRES_DB:-meet_middleware_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      
+      # Celery & Redis
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - db
+      - redis
+      - web
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - meet-network
+
+# ===== Volumes =====
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ===== Networks =====
+networks:
+  meet-network:
+    driver: bridge
