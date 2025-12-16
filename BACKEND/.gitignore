@@ -71,3 +71,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+
+# Documnetation
+*.md
