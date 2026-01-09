@@ -74,3 +74,7 @@ coverage.xml
 
 # Documnetation
 *.md
+
+#srpits de verificacion
+specs/
+scripts/

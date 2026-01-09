@@ -95,8 +95,10 @@ logs/
 # Media files (en desarrollo)
 media/
 
-# Google Service Account (IMPORTANTE: no incluir credenciales)
+# Google Service Account - Permitir credenciales en credentials/
+# (Se copiarán explícitamente en el Dockerfile con permisos seguros)
 *.json
 !package.json
 !package-lock.json
+!credentials/*.json
 

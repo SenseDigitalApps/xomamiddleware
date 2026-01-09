@@ -49,6 +49,39 @@ class MeetingCreateSerializer(serializers.Serializer):
         help_text='Referencia externa de Xoma (ej: appointment_id)'
     )
     
+    auto_record = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text='Si True, habilita grabación automática de la reunión'
+    )
+    
+    create_calendar_event = serializers.BooleanField(
+        required=False,
+        default=True,
+        help_text='Si False, solo crea el espacio de Meet sin evento en Calendar.'
+    )
+    
+    public_access = serializers.BooleanField(
+        required=False,
+        default=None,  # None para detectar si se envió explícitamente
+        allow_null=True,
+        help_text='Si True y create_calendar_event=False, configura acceso público (OPEN). Cualquiera puede unirse sin solicitar permiso. Si no se especifica y create_calendar_event=False, se usa True por defecto.'
+    )
+    
+    def validate(self, data):
+        """
+        Validación personalizada para establecer public_access por defecto.
+        """
+        # Si create_calendar_event=False y public_access no se especificó, usar True por defecto
+        create_calendar_event = data.get('create_calendar_event', True)
+        public_access = data.get('public_access')
+        
+        if not create_calendar_event and public_access is None:
+            # Prioridad: acceso público por defecto cuando no hay Calendar
+            data['public_access'] = True
+        
+        return data
+    
     def validate_invited_emails(self, value):
         """Valida que la lista de emails no esté vacía y sean únicos."""
         if not value:
@@ -117,6 +150,10 @@ class MeetingRecordingSerializer(serializers.ModelSerializer):
     
     meeting_id = serializers.ReadOnlyField(source='meeting.id')
     duration_formatted = serializers.ReadOnlyField()
+    recording_state_display = serializers.CharField(
+        source='get_recording_state_display',
+        read_only=True
+    )
     
     class Meta:
         model = MeetingRecording
@@ -128,6 +165,10 @@ class MeetingRecordingSerializer(serializers.ModelSerializer):
             'drive_file_url',
             'duration_seconds',
             'duration_formatted',
+            'recording_state',
+            'recording_state_display',
+            'recording_start_time',
+            'recording_end_time',
             'available_at',
             'created_at'
         ]
@@ -163,6 +204,7 @@ class MeetingSerializer(serializers.ModelSerializer):
             'scheduled_end',
             'status',
             'status_display',
+            'conference_record_id',
             'participants_count',
             'has_recording',
             'created_at',
@@ -216,6 +258,7 @@ class MeetingDetailSerializer(serializers.ModelSerializer):
             'scheduled_end',
             'status',
             'status_display',
+            'conference_record_id',
             'participants',
             'participants_count',
             'recording',

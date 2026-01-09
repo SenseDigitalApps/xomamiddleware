@@ -182,6 +182,20 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'America/Bogota'
 
+# Celery Beat Schedule (Tareas Periódicas)
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    # Sincronización diaria de grabaciones
+    'sync-recordings-daily': {
+        'task': 'meetings.sync_all_recordings',
+        'schedule': crontab(hour=2, minute=0),  # Diario a las 2:00 AM
+        'options': {
+            'expires': 3600,  # Expira después de 1 hora si no se ejecuta
+        }
+    },
+}
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
@@ -207,7 +221,7 @@ STORAGES = {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",  # Storage simple sin manifest
     },
 }
 

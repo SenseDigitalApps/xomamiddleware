@@ -50,6 +50,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar código de la aplicación
 COPY . .
 
+# Copiar credenciales de Google (si existen) y establecer permisos seguros
+# Esto evita problemas de deadlock en macOS con volúmenes montados
+RUN mkdir -p credentials && \
+    if [ -d credentials ] && [ "$(ls -A credentials/*.json 2>/dev/null)" ]; then \
+        chmod 600 credentials/*.json 2>/dev/null || true; \
+    fi
+
 # Crear directorios necesarios
 RUN mkdir -p staticfiles media logs && \
     chmod -R 755 staticfiles media logs
@@ -63,7 +70,10 @@ FROM application as production
 # Crear usuario no-root para seguridad
 RUN groupadd -r django && \
     useradd -r -g django -u 1000 django && \
-    chown -R django:django /app
+    chown -R django:django /app && \
+    # Asegurar permisos correctos en credenciales
+    chmod 600 /app/credentials/*.json 2>/dev/null || true && \
+    chown django:django /app/credentials/*.json 2>/dev/null || true
 
 # Cambiar a usuario no-root
 USER django

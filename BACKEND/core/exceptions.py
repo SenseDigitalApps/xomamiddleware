@@ -41,6 +41,13 @@ class GoogleMeetCreationError(GoogleAPIError):
         super().__init__(self.message)
 
 
+class GoogleMeetError(GoogleAPIError):
+    """Error al interactuar con Google Meet API."""
+    def __init__(self, message="Error al interactuar con Google Meet API"):
+        self.message = message
+        super().__init__(self.message)
+
+
 class GoogleDriveError(GoogleAPIError):
     """Error al interactuar con Google Drive."""
     def __init__(self, message="Error al interactuar con Google Drive"):

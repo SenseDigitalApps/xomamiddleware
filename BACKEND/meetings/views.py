@@ -24,6 +24,7 @@ from .serializers import (
     ParticipantSerializer
 )
 from .services import MeetingService
+from .tasks import sync_meeting_recording_task, sync_all_recordings_task
 
 # Instancia del servicio de negocio
 meeting_service = MeetingService()
@@ -71,8 +72,24 @@ class MeetingViewSet(viewsets.ViewSet):
                 status=status.HTTP_201_CREATED
             )
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error al crear reunión: {str(e)}", exc_info=True)
+            
+            # Proporcionar mensaje de error más detallado
+            error_message = str(e)
+            if "Google Calendar" in error_message or "Google" in error_message:
+                error_message = (
+                    f"Error al crear evento en Google Calendar: {str(e)}. "
+                    "Verifica la configuración de Google y los logs del servidor."
+                )
+            
             return Response(
-                {'error': f'Error al crear la reunión: {str(e)}'},
+                {
+                    'error': error_message,
+                    'detail': 'No se pudo crear el evento en Google Calendar. '
+                             'La reunión no se guardó en la base de datos.'
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -239,6 +256,63 @@ class MeetingViewSet(viewsets.ViewSet):
         
         serializer = ParticipantSerializer(participants, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def sync_recording(self, request, pk=None):
+        """
+        Sincroniza la grabación de una reunión específica.
+        
+        Busca la grabación en Google Drive y la asocia con la reunión.
+        La sincronización se ejecuta de forma asíncrona mediante Celery.
+        
+        Custom endpoint: POST /api/v1/meetings/{id}/sync-recording/
+        
+        Returns:
+            202: Sincronización iniciada (async)
+                {
+                    "message": "Sincronización iniciada",
+                    "meeting_id": 123,
+                    "task_id": "abc-123-def",
+                    "status": "pending"
+                }
+            404: Reunión no encontrada
+            400: Error en la solicitud
+        """
+        meeting = get_object_or_404(Meeting, pk=pk)
+        
+        # Verificar que la reunión tenga scheduled_start
+        if not meeting.scheduled_start:
+            return Response(
+                {
+                    'error': 'La reunión no tiene fecha/hora programada',
+                    'message': 'No se puede sincronizar grabación sin scheduled_start'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Encolar tarea de sincronización
+        try:
+            task = sync_meeting_recording_task.delay(meeting.id)
+            
+            return Response(
+                {
+                    'message': 'Sincronización de grabación iniciada',
+                    'meeting_id': meeting.id,
+                    'task_id': task.id,
+                    'status': 'pending',
+                    'meeting_status': meeting.status,
+                    'scheduled_start': meeting.scheduled_start.isoformat() if meeting.scheduled_start else None
+                },
+                status=status.HTTP_202_ACCEPTED
+            )
+        except Exception as e:
+            return Response(
+                {
+                    'error': 'Error al iniciar sincronización',
+                    'message': str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class ParticipantViewSet(viewsets.ReadOnlyModelViewSet):
@@ -271,6 +345,7 @@ class MeetingRecordingViewSet(viewsets.ReadOnlyModelViewSet):
     Endpoints:
     - GET /recordings/ - Listar grabaciones
     - GET /recordings/{id}/ - Detalle de grabación
+    - POST /recordings/sync-all/ - Sincronizar todas las grabaciones
     """
     
     queryset = MeetingRecording.objects.select_related('meeting').all()
@@ -285,3 +360,82 @@ class MeetingRecordingViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(meeting_id=meeting_id)
         
         return queryset.order_by('-created_at')
+    
+    @action(detail=False, methods=['post'])
+    def sync_all(self, request):
+        """
+        Sincroniza grabaciones para todas las reuniones sin grabación.
+        
+        Busca grabaciones en Google Drive para todas las reuniones que:
+        - Tienen status FINISHED o SCHEDULED
+        - No tienen grabación asociada
+        - Tienen scheduled_start definido
+        
+        La sincronización se ejecuta de forma asíncrona mediante Celery.
+        
+        Custom endpoint: POST /api/v1/recordings/sync-all/
+        
+        Query Parameters (opcional):
+            - limit: Límite de reuniones a procesar (query param o body)
+        
+        Request Body (opcional):
+            {
+                "limit": 50
+            }
+        
+        Returns:
+            202: Sincronización iniciada (async)
+                {
+                    "message": "Sincronización masiva iniciada",
+                    "task_id": "abc-123-def",
+                    "status": "pending",
+                    "limit": 50
+                }
+            400: Error en la solicitud
+            500: Error al iniciar sincronización
+        """
+        # Obtener límite de query params o body
+        limit = request.query_params.get('limit')
+        if not limit and request.data:
+            limit = request.data.get('limit')
+        
+        # Convertir a int si está presente
+        if limit is not None:
+            try:
+                limit = int(limit)
+                if limit <= 0:
+                    return Response(
+                        {
+                            'error': 'El límite debe ser un número positivo'
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except (ValueError, TypeError):
+                return Response(
+                    {
+                        'error': 'El límite debe ser un número válido'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Encolar tarea de sincronización masiva
+        try:
+            task = sync_all_recordings_task.delay(limit=limit)
+            
+            return Response(
+                {
+                    'message': 'Sincronización masiva de grabaciones iniciada',
+                    'task_id': task.id,
+                    'status': 'pending',
+                    'limit': limit
+                },
+                status=status.HTTP_202_ACCEPTED
+            )
+        except Exception as e:
+            return Response(
+                {
+                    'error': 'Error al iniciar sincronización masiva',
+                    'message': str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

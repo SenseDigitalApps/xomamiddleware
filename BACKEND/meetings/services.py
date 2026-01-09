@@ -11,6 +11,10 @@ from django.db import transaction
 from accounts.models import User
 from .models import Meeting, Participant
 import uuid
+import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MeetingService:
@@ -42,23 +46,83 @@ class MeetingService:
         scheduled_start = validated_data.get('scheduled_start')
         scheduled_end = validated_data.get('scheduled_end')
         external_reference = validated_data.get('external_reference')
+        create_calendar_event = validated_data.get('create_calendar_event', True)
+        auto_record = validated_data.get('auto_record', False)
         
         with transaction.atomic():
             # 1. Buscar o crear usuario organizador
             organizer = self._get_or_create_user_by_email(organizer_email)
             
-            # 2. Crear evento en Google Calendar (INTEGRACIÓN REAL - PASO 7)
+            # 2. Crear evento en Google Calendar O solo espacio de Meet
+            if create_calendar_event:
+                # Flujo original: crear en Calendar
+                public_access = validated_data.get('public_access', False)
             google_event_data = self._create_google_meet_event(
                 organizer_email=organizer_email,
                 invited_emails=invited_emails,
                 scheduled_start=scheduled_start,
-                scheduled_end=scheduled_end
+                    scheduled_end=scheduled_end,
+                    auto_record=auto_record,
+                    public_access=public_access
+                )
+                event_id = google_event_data['event_id']
+                meet_link = google_event_data['meet_link']
+            else:
+                # Nuevo flujo: solo crear espacio de Meet (sin Calendar)
+                from integrations.services import GoogleMeetService
+                import uuid
+                
+                google_service = GoogleMeetService()
+                
+                # Determinar si usar acceso público
+                # PRIORIDAD: Si no se crea evento en Calendar, acceso público por defecto
+                # Esto permite que los invitados se unan directamente sin solicitar permiso
+                public_access = validated_data.get('public_access')
+                if public_access is None:
+                    # Si no se especificó, usar True por defecto cuando no hay Calendar
+                    public_access = True
+                # Convertir a bool explícitamente
+                public_access = bool(public_access)
+                
+                # Logging para debug
+                logger.info(f"Creando reunión sin Calendar:")
+                logger.info(f"  - auto_record: {auto_record}")
+                logger.info(f"  - public_access: {public_access}")
+                logger.info(f"  - create_calendar_event: {create_calendar_event}")
+                
+                try:
+                    space_data = google_service.create_meeting_space_only(
+                        auto_record=auto_record,
+                        invited_emails=invited_emails,
+                        organizer_email=organizer_email,
+                        public_access=public_access
+                    )
+                    
+                    # Verificar que el espacio se creó con la configuración correcta
+                    logger.info(f"Espacio creado. public_access en respuesta: {space_data.get('public_access', 'N/A')}")
+                    
+                    # Generar ID interno para reuniones sin Calendar
+                    event_id = f"meet-{uuid.uuid4().hex}"
+                    meet_link = space_data['meet_link']
+                    
+                    logger.info(f"Reunión creada sin Calendar. ID interno: {event_id}")
+                    logger.info(f"Miembros agregados: {space_data.get('members_added', 0)}")
+                    
+                except Exception as e:
+                    error_msg = f"Error al crear espacio de Meet: {str(e)}"
+                    logger.error(error_msg)
+                    logger.error(f"Traceback completo: {traceback.format_exc()}")
+                    # Re-lanzar la excepción para que el usuario sepa que falló
+                    raise Exception(
+                        f"No se pudo crear el espacio de Google Meet. "
+                        f"Error: {str(e)}. "
+                        f"Verifica la configuración de Google y los logs para más detalles."
             )
             
             # 3. Crear reunión en base de datos
             meeting = Meeting.objects.create(
-                google_event_id=google_event_data['event_id'],
-                meet_link=google_event_data['meet_link'],
+                google_event_id=event_id,
+                meet_link=meet_link,
                 organizer=organizer,
                 invited_emails=invited_emails,
                 scheduled_start=scheduled_start,
@@ -112,7 +176,8 @@ class MeetingService:
         return user
     
     def _create_google_meet_event(self, organizer_email, invited_emails, 
-                                  scheduled_start=None, scheduled_end=None):
+                                  scheduled_start=None, scheduled_end=None, auto_record=False,
+                                  public_access=False):
         """
         Crea un evento real en Google Calendar con Google Meet.
         
@@ -123,12 +188,15 @@ class MeetingService:
             invited_emails (list): Lista de emails invitados
             scheduled_start (datetime): Fecha de inicio
             scheduled_end (datetime): Fecha de fin
+            auto_record (bool): Si True, habilita grabación automática
+            public_access (bool): Si True, configura acceso público (OPEN) al espacio de Meet
         
         Returns:
             dict: Datos del evento creado
                 - event_id: ID del evento en Google Calendar
                 - meet_link: URL de Google Meet
                 - html_link: Link al evento en Calendar
+                - recording_enabled: True si la grabación se configuró
         """
         from integrations.config import validate_google_credentials
         import logging
@@ -150,27 +218,37 @@ class MeetingService:
                     organizer_email=organizer_email,
                     invited_emails=invited_emails,
                     scheduled_start=scheduled_start,
-                    scheduled_end=scheduled_end
+                    scheduled_end=scheduled_end,
+                    auto_record=auto_record,
+                    public_access=public_access
                 )
                 
                 return {
                     'event_id': event_data['event_id'],
                     'meet_link': event_data['meet_link'],
-                    'html_link': event_data.get('html_link', '')
+                    'html_link': event_data.get('html_link', ''),
+                    'recording_enabled': event_data.get('recording_enabled', False)
                 }
                 
             except Exception as e:
-                logger.warning(f"Error con Google API, usando mock: {e}")
-                # Fallback a mock si falla Google
-                return self._create_google_meet_event_mock(
-                    organizer_email, invited_emails, scheduled_start, scheduled_end
+                error_msg = f"Error con Google API: {str(e)}"
+                logger.error(error_msg)
+                logger.error(f"Traceback completo: {traceback.format_exc()}")
+                # Re-lanzar la excepción para que el usuario sepa que falló
+                # No usar mock silenciosamente
+                raise Exception(
+                    f"No se pudo crear el evento en Google Calendar. "
+                    f"Error: {str(e)}. "
+                    f"Verifica la configuración de Google y los logs para más detalles."
                 )
         else:
-            # Usar mock si Google no está configurado
-            logger.info("Google no configurado. Usando MOCK para meet_link")
-            return self._create_google_meet_event_mock(
-                organizer_email, invited_emails, scheduled_start, scheduled_end
+            # Google no está configurado - lanzar error en lugar de usar mock silenciosamente
+            error_msg = (
+                "Google Calendar no está configurado correctamente. "
+                "Verifica que GOOGLE_SERVICE_ACCOUNT_FILE esté configurado en .env"
             )
+            logger.error(error_msg)
+            raise Exception(error_msg)
     
     def _create_google_meet_event_mock(self, organizer_email, invited_emails,
                                        scheduled_start=None, scheduled_end=None):

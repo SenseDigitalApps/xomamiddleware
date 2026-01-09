@@ -29,8 +29,10 @@ class Meeting(models.Model):
     google_event_id = models.CharField(
         max_length=255,
         unique=True,
+        null=True,
+        blank=True,
         verbose_name='ID de Evento de Google',
-        help_text='ID único del evento en Google Calendar'
+        help_text='ID único del evento en Google Calendar (opcional si no se crea en Calendar)'
     )
     
     meet_link = models.URLField(
@@ -74,6 +76,14 @@ class Meeting(models.Model):
         help_text='Estado actual de la reunión'
     )
     
+    conference_record_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name='Conference Record ID',
+        help_text='ID del conference record de Google Meet (se crea cuando la conferencia inicia)'
+    )
+    
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name='Fecha de Creación'
@@ -92,6 +102,7 @@ class Meeting(models.Model):
             models.Index(fields=['google_event_id']),
             models.Index(fields=['status']),
             models.Index(fields=['-created_at']),
+            models.Index(fields=['conference_record_id']),
         ]
     
     def __str__(self):
@@ -105,6 +116,12 @@ class MeetingRecording(models.Model):
     Almacena información sobre la grabación almacenada
     en Google Drive, incluyendo URL y metadatos.
     """
+    
+    RECORDING_STATE_CHOICES = (
+        ('STARTED', 'Started'),
+        ('ENDED', 'Ended'),
+        ('FILE_GENERATED', 'File Generated'),
+    )
     
     meeting = models.OneToOneField(
         Meeting,
@@ -136,6 +153,29 @@ class MeetingRecording(models.Model):
         help_text='Duración de la grabación en segundos'
     )
     
+    recording_state = models.CharField(
+        max_length=20,
+        choices=RECORDING_STATE_CHOICES,
+        null=True,
+        blank=True,
+        verbose_name='Estado de Grabación',
+        help_text='Estado actual de la grabación según Google Meet API (STARTED, ENDED, FILE_GENERATED)'
+    )
+    
+    recording_start_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='Inicio de Grabación',
+        help_text='Timestamp de inicio de la grabación desde Google Meet API'
+    )
+    
+    recording_end_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='Fin de Grabación',
+        help_text='Timestamp de fin de la grabación desde Google Meet API'
+    )
+    
     available_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -165,6 +205,11 @@ class MeetingRecording(models.Model):
         minutes = (self.duration_seconds % 3600) // 60
         seconds = self.duration_seconds % 60
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    
+    @property
+    def is_ready(self):
+        """Retorna True si la grabación está lista (FILE_GENERATED)"""
+        return self.recording_state == 'FILE_GENERATED'
 
 
 class Participant(models.Model):

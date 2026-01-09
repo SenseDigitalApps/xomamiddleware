@@ -20,8 +20,14 @@ GOOGLE_DRIVE_SCOPES = [
     'https://www.googleapis.com/auth/drive.metadata.readonly',
 ]
 
+GOOGLE_MEET_SCOPES = [
+    'https://www.googleapis.com/auth/meetings.space.created',
+    'https://www.googleapis.com/auth/meetings.space.readonly',
+    'https://www.googleapis.com/auth/meetings.space.settings',  
+]
+
 # Todos los scopes combinados
-ALL_SCOPES = GOOGLE_CALENDAR_SCOPES + GOOGLE_DRIVE_SCOPES
+ALL_SCOPES = GOOGLE_CALENDAR_SCOPES + GOOGLE_DRIVE_SCOPES + GOOGLE_MEET_SCOPES
 
 
 def validate_google_credentials(raise_exception=True):
@@ -129,6 +135,11 @@ class GoogleConfig:
     def drive_scopes(self):
         """Scopes necesarios para Google Drive."""
         return GOOGLE_DRIVE_SCOPES
+    
+    @property
+    def meet_scopes(self):
+        """Scopes necesarios para Google Meet."""
+        return GOOGLE_MEET_SCOPES
     
     @property
     def all_scopes(self):

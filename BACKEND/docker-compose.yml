@@ -93,7 +93,8 @@ services:
       - ./media:/app/media
       - ./staticfiles:/app/staticfiles
       - ./logs:/app/logs
-      - ${GOOGLE_SERVICE_ACCOUNT_FILE:-./dummy.json}:/app/credentials/service-account.json:ro
+      # Credenciales ahora se copian dentro del contenedor durante el build
+      # (evita problemas de deadlock en macOS con volúmenes montados)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8000/api/v1/health/"]
@@ -133,7 +134,14 @@ services:
       - web
     volumes:
       - ./logs:/app/logs
-      - ${GOOGLE_SERVICE_ACCOUNT_FILE:-./dummy.json}:/app/credentials/service-account.json:ro
+      # Credenciales ahora se copian dentro del contenedor durante el build
+      # (evita problemas de deadlock en macOS con volúmenes montados)
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
     networks:
       - meet-network
@@ -144,7 +152,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: meet-middleware-celery-beat
-    command: celery -A app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A app beat -l info
     environment:
       # Database
       POSTGRES_DB: ${POSTGRES_DB:-meet_middleware_db}
@@ -162,6 +170,12 @@ services:
       - web
     volumes:
       - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /app/celerybeat-schedule || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
     networks:
       - meet-network

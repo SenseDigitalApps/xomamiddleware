@@ -58,5 +58,7 @@ services:
     # No exponer puerto externamente en producción
     expose:
       - "6379"
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    # Si REDIS_PASSWORD está vacío o no definido, no usar requirepass
+    # Para usar password, define REDIS_PASSWORD en .env
+    command: redis-server --appendonly yes
 
